@@ -169,7 +169,14 @@ function startUI({ wa }) {
   const isGroup = (jid) => !!jid && jid.endsWith('@g.us');
 
   // --- rendering helpers ---
-  const esc = (s) => blessed.escape(String(s == null ? '' : s));
+  // Strip C0/C1 control bytes (incl. raw ESC/ANSI sequences and newlines)
+  // *before* blessed.escape. blessed.escape only neutralizes its own {tag}
+  // chars — a message body carrying raw control bytes would otherwise move the
+  // terminal cursor and scatter characters across the pane (corrupt render).
+  const esc = (s) =>
+    blessed.escape(
+      String(s == null ? "" : s).replace(/[\u0000-\u001F\u007F-\u009F\u2028\u2029]/g, " ")
+    );
 
   const SENDER_COLORS = [
     '#34B7F1', '#25D366', '#f5c542', '#ff7b72', '#c792ea',
@@ -315,7 +322,7 @@ function startUI({ wa }) {
 
   // Render the (recent) history of the open chat in one pass. Skips system /
   // empty messages (key-distribution, protocol edits) so the pane isn't blank.
-  function renderChat(jid) {
+  const renderChat = safe(function renderChat(jid) {
     const icon = isGroup(jid) ? '👥' : '💬';
     log.setLabel(` ${icon} ${nameFor(jid)} `);
     const all = store.messagesFor(jid).filter((m) => messageText(m) !== '');
@@ -340,7 +347,7 @@ function startUI({ wa }) {
     // against, so late-arriving messages reliably trigger a repaint.
     lastRenderLen = store.messagesFor(jid).length;
     screen.render();
-  }
+  });
   let lastRenderJid = null;
   let lastRenderLen = 0;
 
@@ -360,7 +367,7 @@ function startUI({ wa }) {
     if (store.markRead(jid)) scheduleRefresh(); // repaint list to drop the badge
   }
 
-  function openSelected() {
+  const openSelected = safe(function openSelected() {
     const jid = jids[list.selected];
     if (!jid) return;
     currentJid = jid;
@@ -372,7 +379,7 @@ function startUI({ wa }) {
     if (store.messagesFor(jid).length === 0) store.fetchHistory(jid);
     if (isGroup(jid)) loadMembers(jid); // prefetch for @-mentions
     input.focus();
-  }
+  });
 
   // Fetch + cache a group's participant jids (for the mention picker).
   function loadMembers(jid) {

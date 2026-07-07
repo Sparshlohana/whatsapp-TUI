@@ -186,6 +186,7 @@ function startUI({ wa }) {
   let suppressCancel = false;      // ignore the textbox 'cancel' while opening picker
   let replyTo = null;              // WAMessage to quote on the next send, or null
   let renderedMsgs = [];           // messages currently shown in the log (for reply)
+  let replySnapshot = [];          // frozen copy of the list shown in the reply picker
 
   const nameFor = (jid) => store.nameFor(jid);
   const numberOf = (jid) => (jid || '').replace(/@.*$/, '');
@@ -396,6 +397,8 @@ function startUI({ wa }) {
     if (!jid) return;
     currentJid = jid;
     pendingMentions = [];
+    replyTo = null; // a pending reply belongs to the chat it was staged in
+    setInputLabel();
     renderChat(jid);
     markChatRead(jid); // opening a chat marks it read
     // Bucket empty (history batch not synced yet, or lid/pn alias unresolved)?
@@ -534,22 +537,25 @@ function startUI({ wa }) {
       input.cancel();
       suppressCancel = false;
     }
+    // Snapshot the visible messages: an incoming message can reassign
+    // renderedMsgs while the picker is open, which would desync the indexes.
+    replySnapshot = renderedMsgs.slice();
     replyBox.setItems(
-      renderedMsgs.map((m) => {
+      replySnapshot.map((m) => {
         const who = m.key?.fromMe
           ? 'me'
           : nameFor(m.key?.participant || m.key?.remoteJid);
         return `{${DIM}-fg}${esc(who)}:{/} ${esc(snippet(m))}`;
       })
     );
-    replyBox.select(renderedMsgs.length - 1); // default to the newest message
+    replyBox.select(replySnapshot.length - 1); // default to the newest message
     replyBox.show();
     replyBox.focus();
     screen.render();
   }
 
   function pickReply() {
-    const m = renderedMsgs[replyBox.selected];
+    const m = replySnapshot[replyBox.selected];
     replyBox.hide();
     if (m) {
       replyTo = m;

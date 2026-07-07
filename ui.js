@@ -526,6 +526,14 @@ function startUI({ wa }) {
   // Open the reply picker over the message pane for the currently open chat.
   function openReply() {
     if (!currentJid || !renderedMsgs.length) return;
+    // Release the input textbox's key grab before focusing the picker; if the
+    // textbox keeps reading, focus is split and the keyboard deadlocks (same
+    // pattern as openMention). Only when the input is the widget reading.
+    if (screen.focused === input) {
+      suppressCancel = true;
+      input.cancel();
+      suppressCancel = false;
+    }
     replyBox.setItems(
       renderedMsgs.map((m) => {
         const who = m.key?.fromMe
@@ -677,15 +685,12 @@ function startUI({ wa }) {
   // `/` from the list opens search.
   list.key(['/'], () => search.focus());
 
-  // Ctrl-R: open the reply picker to quote a message in the open chat.
-  // Bind on the widgets that hold focus (the input textbox grabs keys in read
-  // mode, so a screen-level binding never fires while typing).
-  const openReplyKey = () => {
+  // Ctrl-R opens the reply picker. While the input is focused the textbox grabs
+  // keys, so that case is handled in the input 'keypress' hook above; this
+  // screen-level binding covers Ctrl-R from the list / message pane.
+  screen.key(['C-r'], () => {
     if (currentJid) openReply();
-  };
-  screen.key(['C-r'], openReplyKey);
-  input.key(['C-r'], openReplyKey);
-  list.key(['C-r'], openReplyKey);
+  });
 
   // F toggles history-sync mode (recent <-> full). Reconnects to apply it.
   screen.key(['f', 'F'], () => {

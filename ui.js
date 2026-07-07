@@ -262,7 +262,9 @@ function startUI({ wa }) {
       chats.map((c) => {
         const g = isGroup(c.id);
         const icon = g ? `{${BLUE}-fg}#{/}` : `{${GREEN}-fg}@{/}`;
-        return `${icon} ${esc(nameFor(c.id))}`;
+        const n = store.unreadFor(c.id);
+        const badge = n ? `  {${GREEN}-fg}{bold}(${n > 99 ? '99+' : n}){/}` : '';
+        return `${icon} ${esc(nameFor(c.id))}${badge}`;
       })
     );
 
@@ -322,16 +324,41 @@ function startUI({ wa }) {
     if (all.length > recent.length) {
       lines.unshift(`{${DIM}-fg}── last ${recent.length} of ${all.length} messages ──{/}`);
     }
-    if (!lines.length) lines.push(`{${DIM}-fg}(no messages yet){/}`);
+    if (!lines.length) {
+      // Distinguish "still syncing" from a genuinely empty chat so an unsynced
+      // chat doesn't look broken/blank while history is streaming in.
+      const msg = store.syncComplete
+        ? '(no messages yet)'
+        : '(syncing… messages will appear here)';
+      lines.push(`{${DIM}-fg}${msg}{/}`);
+    }
     // One setContent is far cheaper than N log.add() calls.
     log.setContent(lines.join('\n'));
     log.setScrollPerc(100); // jump to the newest message
     lastRenderJid = jid;
-    lastRenderLen = all.length;
+    // Track the *unfiltered* count — this is what scheduleRefresh compares
+    // against, so late-arriving messages reliably trigger a repaint.
+    lastRenderLen = store.messagesFor(jid).length;
     screen.render();
   }
   let lastRenderJid = null;
   let lastRenderLen = 0;
+
+  // Send WhatsApp read receipts for a chat's incoming messages and clear its
+  // unread counter. Capped so opening a huge backlog doesn't blast hundreds of
+  // receipts. Fire-and-forget: a failed receipt must not disrupt the UI.
+  function markChatRead(jid) {
+    const c = client();
+    const keys = store
+      .messagesFor(jid)
+      .filter((m) => !m.key?.fromMe)
+      .slice(-50)
+      .map((m) => m.key);
+    if (c && keys.length) {
+      Promise.resolve(c.readMessages(keys)).catch(() => {});
+    }
+    if (store.markRead(jid)) scheduleRefresh(); // repaint list to drop the badge
+  }
 
   function openSelected() {
     const jid = jids[list.selected];
@@ -339,6 +366,7 @@ function startUI({ wa }) {
     currentJid = jid;
     pendingMentions = [];
     renderChat(jid);
+    markChatRead(jid); // opening a chat marks it read
     // Bucket empty (history batch not synced yet, or lid/pn alias unresolved)?
     // Pull older messages on demand; they re-render via the 'sync' hook below.
     if (store.messagesFor(jid).length === 0) store.fetchHistory(jid);
@@ -488,10 +516,20 @@ function startUI({ wa }) {
 
   // Live incoming/outgoing messages.
   store.on('message', safe(({ jid, message }) => {
-    if (currentJid && store.sameChat(jid, currentJid) && messageText(message) !== '') {
-      log.add(lineFor(message));
-      log.setScrollPerc(100); // follow the conversation
-      screen.render();
+    if (currentJid && store.sameChat(jid, currentJid)) {
+      if (messageText(message) !== '') {
+        log.add(lineFor(message));
+        log.setScrollPerc(100); // follow the conversation
+        screen.render();
+      }
+      // Chat is open: receipt just this new message (not a bulk re-read of the
+      // last 50) and keep its unread counter cleared. The trailing
+      // scheduleRefresh below repaints the list.
+      if (!message.key?.fromMe) {
+        const c = client();
+        if (c) Promise.resolve(c.readMessages([message.key])).catch(() => {});
+        store.markRead(currentJid);
+      }
     }
     scheduleRefresh(); // coalesced list update (bump/re-sort)
   }));

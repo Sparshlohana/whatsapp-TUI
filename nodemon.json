@@ -4,7 +4,9 @@
   "ignore": [
     "auth_info_baileys/**",
     "node_modules/**",
-    ".git/**"
+    ".git/**",
+    "wp-chat-store.json",
+    "wp-chat.log"
   ],
   "delay": "2500"
 }

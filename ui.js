@@ -175,7 +175,7 @@ function startUI({ wa }) {
   // terminal cursor and scatter characters across the pane (corrupt render).
   const esc = (s) =>
     blessed.escape(
-      String(s == null ? "" : s).replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
+      String(s == null ? "" : s).replace(/[\u0000-\u001F\u007F-\u009F\u2028\u2029]/g, " ")
     );
 
   const SENDER_COLORS = [

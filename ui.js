@@ -567,8 +567,13 @@ function startUI({ wa }) {
   list.on('select', openSelected);
 
   // Open the mention picker when '@' is typed in a group chat.
-  input.on('keypress', (ch) => {
+  input.on('keypress', (ch, key) => {
     if (ch === '@' && isGroup(currentJid)) setImmediate(openMention);
+    // Ctrl-R while typing: open the reply picker (the textbox grabs keys in
+    // read mode, so this keypress hook is the reliable place to catch it).
+    else if (key && key.ctrl && key.name === 'r' && currentJid) {
+      setImmediate(openReply);
+    }
   });
 
   input.on('submit', (value) => {
@@ -673,9 +678,14 @@ function startUI({ wa }) {
   list.key(['/'], () => search.focus());
 
   // Ctrl-R: open the reply picker to quote a message in the open chat.
-  screen.key(['C-r'], () => {
+  // Bind on the widgets that hold focus (the input textbox grabs keys in read
+  // mode, so a screen-level binding never fires while typing).
+  const openReplyKey = () => {
     if (currentJid) openReply();
-  });
+  };
+  screen.key(['C-r'], openReplyKey);
+  input.key(['C-r'], openReplyKey);
+  list.key(['C-r'], openReplyKey);
 
   // F toggles history-sync mode (recent <-> full). Reconnects to apply it.
   screen.key(['f', 'F'], () => {

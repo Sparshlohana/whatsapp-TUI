@@ -14,6 +14,7 @@ class Store extends EventEmitter {
     this.pushNames = new Map();       // normalized jid -> sender's display name
     this.chats = new Map();    // jid -> Chat
     this.messages = new Map(); // jid -> WAMessage[] (chronological)
+    this.unread = new Map();   // canonical jid -> unread count (incoming, live)
     this.client = null;        // Baileys socket, for active LID lookups
     this._lidInflight = new Set(); // lids currently being resolved
     this._historyInflight = new Set(); // jids with an on-demand fetch pending
@@ -43,6 +44,7 @@ class Store extends EventEmitter {
       for (const [jid, list] of d.messages || []) {
         this.messages.set(jid, list.slice(-this._maxPerChat));
       }
+      for (const [jid, n] of d.unread || []) this.unread.set(jid, n);
     } catch (_) {
       /* no cache yet, or unreadable — start fresh */
     }
@@ -69,6 +71,7 @@ class Store extends EventEmitter {
           k,
           v.slice(-this._maxPerChat),
         ]),
+        unread: [...this.unread],
       };
       fs.writeFile(this._file, JSON.stringify(data), () => {});
     } catch (_) {
@@ -157,6 +160,7 @@ class Store extends EventEmitter {
       for (const jid of jids) {
         this.chats.delete(jid);
         this.messages.delete(jid);
+        this.unread.delete(this._canonicalJid(jid));
       }
       this.emit('sync');
     });
@@ -337,9 +341,33 @@ class Store extends EventEmitter {
     }
     this.chats.set(jid, chat);
 
+    // Count genuinely-new incoming messages as unread. History-sync batches
+    // (live=false) and our own echoes (fromMe) never bump the count. The UI
+    // clears it via markRead() when the chat is opened / already focused.
+    if (live && isNew && !m.key?.fromMe) {
+      const canon = this._canonicalJid(jid);
+      this.unread.set(canon, (this.unread.get(canon) || 0) + 1);
+    }
+
     // Only notify for genuinely new messages so echoes don't double-render.
     if (live && isNew) this.emit('message', { jid, message: m });
     if (isNew) this._scheduleSave();
+  }
+
+  // Unread incoming count for a chat (keyed by canonical jid, so lid/pn aliases
+  // of the same DM share one counter).
+  unreadFor(jid) {
+    return this.unread.get(this._canonicalJid(jid)) || 0;
+  }
+
+  // Clear a chat's unread counter. Returns true if anything changed.
+  markRead(jid) {
+    const canon = this._canonicalJid(jid);
+    if (!this.unread.get(canon)) return false;
+    this.unread.delete(canon);
+    this._scheduleSave();
+    this.emit('sync');
+    return true;
   }
 
   // Chats sorted newest-first, excluding the status feed. LID/PN duplicates of

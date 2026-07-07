@@ -354,20 +354,38 @@ class Store extends EventEmitter {
     if (isNew) this._scheduleSave();
   }
 
-  // Unread incoming count for a chat (keyed by canonical jid, so lid/pn aliases
-  // of the same DM share one counter).
-  unreadFor(jid) {
-    return this.unread.get(this._canonicalJid(jid)) || 0;
+  // All keys a chat's unread count might live under: its alias set (lid + pn)
+  // plus the canonical form. The canonical jid isn't stable over time — a count
+  // written under a pn before the lid mapping is learned would otherwise be
+  // orphaned once the chat canonicalizes to the lid — so we always read/clear
+  // across every alias, mirroring messagesFor().
+  _unreadKeys(jid) {
+    const keys = this._aliasSet(jid);
+    keys.add(this._canonicalJid(jid));
+    return keys;
   }
 
-  // Clear a chat's unread counter. Returns true if anything changed.
+  // Unread incoming count for a chat, summed across all of its alias keys.
+  unreadFor(jid) {
+    let n = 0;
+    for (const key of this._unreadKeys(jid)) n += this.unread.get(key) || 0;
+    return n;
+  }
+
+  // Clear a chat's unread counter across every alias. Returns true if changed.
   markRead(jid) {
-    const canon = this._canonicalJid(jid);
-    if (!this.unread.get(canon)) return false;
-    this.unread.delete(canon);
-    this._scheduleSave();
-    this.emit('sync');
-    return true;
+    let changed = false;
+    for (const key of this._unreadKeys(jid)) {
+      if (this.unread.get(key)) {
+        this.unread.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) {
+      this._scheduleSave();
+      this.emit('sync');
+    }
+    return changed;
   }
 
   // Chats sorted newest-first, excluding the status feed. LID/PN duplicates of

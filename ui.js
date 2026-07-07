@@ -522,8 +522,14 @@ function startUI({ wa }) {
         log.setScrollPerc(100); // follow the conversation
         screen.render();
       }
-      // Chat is open: receipt the new message and keep its badge cleared.
-      if (!message.key?.fromMe) markChatRead(currentJid);
+      // Chat is open: receipt just this new message (not a bulk re-read of the
+      // last 50) and keep its unread counter cleared. The trailing
+      // scheduleRefresh below repaints the list.
+      if (!message.key?.fromMe) {
+        const c = client();
+        if (c) Promise.resolve(c.readMessages([message.key])).catch(() => {});
+        store.markRead(currentJid);
+      }
     }
     scheduleRefresh(); // coalesced list update (bump/re-sort)
   }));

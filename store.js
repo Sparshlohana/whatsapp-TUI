@@ -38,7 +38,11 @@ class Store extends EventEmitter {
       for (const c of d.chats || []) this._upsertChat(c);
       for (const [lid, pn] of d.lidToPn || []) this._mapLidPn(lid, pn);
       for (const [jid, name] of d.pushNames || []) this.pushNames.set(jid, name);
-      for (const [jid, list] of d.messages || []) this.messages.set(jid, list);
+      // Cap on load too — a store file written with a larger cap must not load
+      // unbounded arrays into memory (mirrors the trim in _save).
+      for (const [jid, list] of d.messages || []) {
+        this.messages.set(jid, list.slice(-this._maxPerChat));
+      }
     } catch (_) {
       /* no cache yet, or unreadable — start fresh */
     }

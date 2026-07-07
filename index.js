@@ -12,7 +12,8 @@ const fullHistory = !process.argv.includes('--recent');
 startWhatsApp({
   fullHistory,
   onReady: ({ wa }) => {
-    console.log('✅ Connected. Loading interface...');
+    // No console output here: startUI clears the screen and redirects console
+    // to the log file immediately, so anything printed would just flash once.
     startUI({ wa });
   },
 }).catch((err) => console.error('❌ Failed to start:', err));

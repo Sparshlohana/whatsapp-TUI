@@ -457,8 +457,12 @@ function startUI({ wa }) {
   input.on('submit', (value) => {
     const text = (value || '').trim();
     input.clearValue();
-    // Only keep mentions whose number still appears in the sent text.
-    const mentions = pendingMentions.filter((jid) => text.includes(numberOf(jid)));
+    // Only keep mentions whose exact '@<number>' token still appears in the
+    // sent text. A bare substring check is wrong — one member's number can be
+    // a substring of another's, or appear incidentally in the message body.
+    const mentions = pendingMentions.filter((jid) =>
+      new RegExp(`@${numberOf(jid)}(?!\\d)`).test(text)
+    );
     pendingMentions = [];
     // Re-arm the input synchronously so the keyboard never freezes waiting on
     // the network. The send runs in the background — a hung/slow sendMessage

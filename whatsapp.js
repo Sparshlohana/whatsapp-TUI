@@ -15,6 +15,8 @@ async function startWhatsApp({ onReady, fullHistory = false } = {}) {
   let readyFired = false;
   let reconnecting = false;
 
+  let backoff = 0; // reconnect delay in ms; grows on repeated failures
+
   const wa = {
     store,
     client: null,
@@ -33,10 +35,22 @@ async function startWhatsApp({ onReady, fullHistory = false } = {}) {
     } catch (_) {}
   }
 
-  async function connect() {
-    // Same auth as whatsapp-bot: multi-file session persisted on disk.
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+  // Reload the session once; reused across reconnects so we don't re-read the
+  // whole auth folder from disk on every attempt.
+  const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
 
+  // Schedule a reconnect with exponential backoff (1s → 30s cap). A deliberate
+  // mode-switch reconnect skips the delay. Backoff resets on a clean 'open'.
+  function scheduleReconnect() {
+    if (reconnecting) {
+      backoff = 0; // user-initiated: reconnect immediately
+    } else {
+      backoff = backoff ? Math.min(backoff * 2, 30000) : 1000;
+    }
+    setTimeout(() => connect(), backoff);
+  }
+
+  async function connect() {
     const client = makeWASocket({
       logger: pino({ level: 'silent' }),
       browser: ['My-Bot', 'Chrome', '1.0.0'],
@@ -61,6 +75,7 @@ async function startWhatsApp({ onReady, fullHistory = false } = {}) {
 
       if (connection === 'open') {
         reconnecting = false;
+        backoff = 0; // healthy connection — reset the backoff ladder
         if (!readyFired && typeof onReady === 'function') {
           readyFired = true;
           onReady({ wa });
@@ -70,7 +85,7 @@ async function startWhatsApp({ onReady, fullHistory = false } = {}) {
       if (connection === 'close') {
         const reason = lastDisconnect?.error?.output?.statusCode;
         if (reconnecting || reason !== DisconnectReason.loggedOut) {
-          connect(); // reconnect, reusing the same store
+          scheduleReconnect(); // backed-off reconnect, reusing the same store
         } else {
           console.log('🔐 Logged out. Delete the "auth_info_baileys" folder and restart to re-login.');
           process.exit(0);

@@ -324,12 +324,21 @@ function startUI({ wa }) {
     if (all.length > recent.length) {
       lines.unshift(`{${DIM}-fg}── last ${recent.length} of ${all.length} messages ──{/}`);
     }
-    if (!lines.length) lines.push(`{${DIM}-fg}(no messages yet){/}`);
+    if (!lines.length) {
+      // Distinguish "still syncing" from a genuinely empty chat so an unsynced
+      // chat doesn't look broken/blank while history is streaming in.
+      const msg = store.syncComplete
+        ? '(no messages yet)'
+        : '(syncing… messages will appear here)';
+      lines.push(`{${DIM}-fg}${msg}{/}`);
+    }
     // One setContent is far cheaper than N log.add() calls.
     log.setContent(lines.join('\n'));
     log.setScrollPerc(100); // jump to the newest message
     lastRenderJid = jid;
-    lastRenderLen = all.length;
+    // Track the *unfiltered* count — this is what scheduleRefresh compares
+    // against, so late-arriving messages reliably trigger a repaint.
+    lastRenderLen = store.messagesFor(jid).length;
     screen.render();
   }
   let lastRenderJid = null;

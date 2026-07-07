@@ -154,6 +154,27 @@ function startUI({ wa }) {
     },
   });
 
+  // Reply picker: overlay list to choose a message to quote (opened with Ctrl-R).
+  const replyBox = blessed.list({
+    parent: screen,
+    label: ' ↩ Reply — Enter reply · Esc cancel ',
+    hidden: true,
+    top: 1,
+    left: SIDEBAR,
+    width: `100%-${SIDEBAR}`,
+    height: '100%-4',
+    keys: true,
+    vi: true,
+    tags: true,
+    scrollbar: { ch: ' ', style: { bg: GREEN } },
+    border: { type: 'line' },
+    style: {
+      selected: { bg: GREEN, fg: 'black', bold: true },
+      item: { fg: 'white' },
+      border: { fg: GREEN },
+    },
+  });
+
   let jids = [];        // parallel to list items: index -> jid
   let currentJid = null;
   let filter = '';      // current search query (lowercased)
@@ -163,6 +184,8 @@ function startUI({ wa }) {
   let mentionFilter = '';          // filter text inside the picker
   let mentionCandidates = [];      // parallel to mentionBox items: participant jids
   let suppressCancel = false;      // ignore the textbox 'cancel' while opening picker
+  let replyTo = null;              // WAMessage to quote on the next send, or null
+  let renderedMsgs = [];           // messages currently shown in the log (for reply)
 
   const nameFor = (jid) => store.nameFor(jid);
   const numberOf = (jid) => (jid || '').replace(/@.*$/, '');
@@ -206,7 +229,7 @@ function startUI({ wa }) {
     const mode = wa.fullHistory ? 'full' : 'recent';
     header.setContent(
       ` {bold}wp-chat{/}    ${dot} ${state}    sync: ${esc(store.syncStatus())}` +
-        `    mode: ${mode} [F]    ·  / search · Tab focus · q quit `
+        `    mode: ${mode} [F]    ·  / search · Tab focus · ^R reply · q quit `
     );
   }
 
@@ -327,6 +350,7 @@ function startUI({ wa }) {
     log.setLabel(` ${icon} ${nameFor(jid)} `);
     const all = store.messagesFor(jid).filter((m) => messageText(m) !== '');
     const recent = all.slice(-RENDER_LIMIT);
+    renderedMsgs = recent; // keep the visible messages for the reply picker
     const lines = recent.map(lineFor);
     if (all.length > recent.length) {
       lines.unshift(`{${DIM}-fg}── last ${recent.length} of ${all.length} messages ──{/}`);
@@ -481,6 +505,64 @@ function startUI({ wa }) {
     screen.render();
   });
 
+  // --- reply / quote ---
+  const DEFAULT_INPUT_LABEL = ' ✍  message · Enter send · Esc back ';
+
+  // Short single-line preview of a message's text (for pickers / labels).
+  function snippet(m, n = 48) {
+    const t = messageText(m).replace(/\s+/g, ' ').trim();
+    return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+  }
+
+  // Reflect the pending reply (if any) in the input's label.
+  function setInputLabel() {
+    input.setLabel(
+      replyTo
+        ? ` ↩ replying: ${esc(snippet(replyTo, 28))} · Enter send · Esc cancel `
+        : DEFAULT_INPUT_LABEL
+    );
+  }
+
+  // Open the reply picker over the message pane for the currently open chat.
+  function openReply() {
+    if (!currentJid || !renderedMsgs.length) return;
+    replyBox.setItems(
+      renderedMsgs.map((m) => {
+        const who = m.key?.fromMe
+          ? 'me'
+          : nameFor(m.key?.participant || m.key?.remoteJid);
+        return `{${DIM}-fg}${esc(who)}:{/} ${esc(snippet(m))}`;
+      })
+    );
+    replyBox.select(renderedMsgs.length - 1); // default to the newest message
+    replyBox.show();
+    replyBox.focus();
+    screen.render();
+  }
+
+  function pickReply() {
+    const m = renderedMsgs[replyBox.selected];
+    replyBox.hide();
+    if (m) {
+      replyTo = m;
+      setInputLabel();
+    }
+    input.focus();
+    screen.render();
+  }
+
+  function cancelReply() {
+    replyTo = null;
+    setInputLabel();
+  }
+
+  replyBox.key(['enter'], pickReply);
+  replyBox.key(['escape'], () => {
+    replyBox.hide();
+    input.focus();
+    screen.render();
+  });
+
   // --- events ---
   list.on('select', openSelected);
 
@@ -499,6 +581,11 @@ function startUI({ wa }) {
       new RegExp(`@${numberOf(jid)}(?!\\d)`).test(text)
     );
     pendingMentions = [];
+    // Capture and clear the quoted message before re-arming, then reset the
+    // label so the next message is a normal send.
+    const quoted = replyTo;
+    replyTo = null;
+    setInputLabel();
     // Re-arm the input synchronously so the keyboard never freezes waiting on
     // the network. The send runs in the background — a hung/slow sendMessage
     // must not block re-focus (which is what re-starts blessed's key reading).
@@ -506,10 +593,10 @@ function startUI({ wa }) {
     input.focus(); // stay in input for the next message
     screen.render();
     if (text && jid) {
+      const content = mentions.length ? { text, mentions } : { text };
+      const opts = quoted ? { quoted } : undefined;
       Promise.resolve()
-        .then(() =>
-          client().sendMessage(jid, mentions.length ? { text, mentions } : { text })
-        )
+        .then(() => client().sendMessage(jid, content, opts))
         .then((sent) => {
           store.ingest(sent); // ensure our own message shows immediately
           screen.render();
@@ -571,12 +658,24 @@ function startUI({ wa }) {
   // Esc while typing: blessed fires 'cancel' (screen keys are grabbed during
   // input), so this is the reliable "back to list" hook.
   input.on('cancel', () => {
-    if (suppressCancel) return; // opening the mention picker, not going back
+    if (suppressCancel) return; // opening a picker, not going back
+    // First Esc clears a pending reply (stay in input); next Esc goes back.
+    if (replyTo) {
+      cancelReply();
+      input.focus();
+      screen.render();
+      return;
+    }
     list.focus();
     screen.render();
   });
   // `/` from the list opens search.
   list.key(['/'], () => search.focus());
+
+  // Ctrl-R: open the reply picker to quote a message in the open chat.
+  screen.key(['C-r'], () => {
+    if (currentJid) openReply();
+  });
 
   // F toggles history-sync mode (recent <-> full). Reconnects to apply it.
   screen.key(['f', 'F'], () => {

@@ -329,12 +329,27 @@ function startUI({ wa }) {
   }
 
   // Format one message as a styled (tagged) display line.
+  // Delivery-status tick for a message we sent. Mirrors WhatsApp:
+  // · pending, ✓ sent, ✓✓ delivered, ✓✓ (blue) read. proto
+  // WebMessageInfo.Status: 0 ERROR, 1 PENDING, 2 SERVER_ACK, 3 DELIVERY_ACK,
+  // 4 READ, 5 PLAYED.
+  function statusTick(m) {
+    // No tick when it's not ours, or the status is unknown (e.g. messages
+    // loaded from history that don't carry one — avoids a false "pending").
+    if (!m.key?.fromMe || m.status == null) return '';
+    const s = Number(m.status);
+    if (s <= 1) return ` {${DIM}-fg}·{/}`;          // pending / error
+    if (s === 2) return ` {${DIM}-fg}✓{/}`;         // sent to server
+    if (s === 3) return ` {${DIM}-fg}✓✓{/}`;        // delivered
+    return ` {${BLUE}-fg}✓✓{/}`;                    // read / played
+  }
+
   function lineFor(m) {
     const body = esc(messageText(m));
     const ts = timeStr(m.messageTimestamp);
     const time = ts ? `{${DIM}-fg}${ts}{/} ` : '';
     if (m.key?.fromMe) {
-      return `${time}{${GREEN}-fg}{bold}me{/}{${GREEN}-fg}:{/} ${body}`;
+      return `${time}{${GREEN}-fg}{bold}me{/}{${GREEN}-fg}:{/} ${body}${statusTick(m)}`;
     }
     const sjid = m.key?.participant || m.key?.remoteJid;
     const col = colorFor(sjid);
@@ -346,9 +361,14 @@ function startUI({ wa }) {
 
   // Render the (recent) history of the open chat in one pass. Skips system /
   // empty messages (key-distribution, protocol edits) so the pane isn't blank.
-  const renderChat = safe(function renderChat(jid) {
+  const renderChat = safe(function renderChat(jid, keepScroll) {
     const icon = isGroup(jid) ? '👥' : '💬';
     log.setLabel(` ${icon} ${nameFor(jid)} `);
+    // Preserve the reader's scroll position on in-place refreshes (e.g. a
+    // status-tick update) unless they're already at the bottom. Captured
+    // before setContent replaces the buffer.
+    const atBottom = log.getScrollPerc() >= 99;
+    const prevScroll = log.getScroll();
     const all = store.messagesFor(jid).filter((m) => messageText(m) !== '');
     const recent = all.slice(-RENDER_LIMIT);
     renderedMsgs = recent; // keep the visible messages for the reply picker
@@ -366,7 +386,10 @@ function startUI({ wa }) {
     }
     // One setContent is far cheaper than N log.add() calls.
     log.setContent(lines.join('\n'));
-    log.setScrollPerc(100); // jump to the newest message
+    // Keep the reader where they were on an in-place refresh; otherwise jump to
+    // the newest message (opening a chat, or already following at the bottom).
+    if (keepScroll && !atBottom) log.setScroll(prevScroll);
+    else log.setScrollPerc(100);
     lastRenderJid = jid;
     // Track the *unfiltered* count — this is what scheduleRefresh compares
     // against, so late-arriving messages reliably trigger a repaint.
@@ -656,6 +679,18 @@ function startUI({ wa }) {
 
   // History batches / contact updates arriving async.
   store.on('sync', scheduleRefresh);
+
+  // Delivery/read status changed for a sent message: re-render the open chat so
+  // its ticks update. Coalesced — a burst of receipts triggers one repaint.
+  let statusRenderTimer = null;
+  store.on('message-update', safe(({ jid }) => {
+    if (!currentJid || !store.sameChat(jid, currentJid)) return;
+    if (statusRenderTimer) return;
+    statusRenderTimer = setTimeout(() => {
+      statusRenderTimer = null;
+      renderChat(currentJid, true); // keep scroll — don't yank a reader to the bottom
+    }, 250);
+  }));
 
   // Live-filter the list as the user types in the search box.
   search.on('keypress', () => {

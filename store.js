@@ -169,6 +169,20 @@ class Store extends EventEmitter {
       for (const m of messages) this._appendMessage(m, true);
     });
 
+    // Delivery/read state for messages we sent. Baileys reports it as the proto
+    // WebMessageInfo.Status enum (2 sent, 3 delivered, 4 read, 5 played).
+    ev.on('messages.update', (updates) => {
+      let touched = false;
+      for (const { key, update } of updates || []) {
+        if (update?.status == null || !key?.id) continue;
+        if (this._applyStatus(key, update.status)) touched = true;
+      }
+      if (touched) {
+        this._scheduleSave();
+        this.emit('sync');
+      }
+    });
+
     // LID <-> phone-number mapping (Baileys 7 addresses DMs by @lid).
     ev.on('lid-mapping.update', ({ lid, pn }) => {
       if (lid && pn) {
@@ -352,6 +366,26 @@ class Store extends EventEmitter {
     // Only notify for genuinely new messages so echoes don't double-render.
     if (live && isNew) this.emit('message', { jid, message: m });
     if (isNew) this._scheduleSave();
+  }
+
+  // Update the delivery status of a message we sent, found across alias buckets
+  // by id. Emits a targeted 'message-update' so the open chat can refresh its
+  // ticks. Never regresses status (read > delivered > sent) for out-of-order
+  // updates. Returns true if a stored message changed.
+  _applyStatus(key, status) {
+    const jid = this._norm(key.remoteJid);
+    if (!jid) return false;
+    for (const alias of this._aliasSet(jid)) {
+      const list = this.messages.get(alias);
+      if (!list) continue;
+      const m = list.find((x) => x.key?.id === key.id);
+      if (!m) continue;
+      if ((Number(m.status) || 0) >= Number(status)) return false;
+      m.status = status;
+      this.emit('message-update', { jid });
+      return true;
+    }
+    return false;
   }
 
   // All keys a chat's unread count might live under: its alias set (lid + pn)

@@ -329,12 +329,25 @@ function startUI({ wa }) {
   }
 
   // Format one message as a styled (tagged) display line.
+  // Delivery-status tick for a message we sent. Mirrors WhatsApp:
+  // · pending, ✓ sent, ✓✓ delivered, ✓✓ (blue) read. proto
+  // WebMessageInfo.Status: 0 ERROR, 1 PENDING, 2 SERVER_ACK, 3 DELIVERY_ACK,
+  // 4 READ, 5 PLAYED.
+  function statusTick(m) {
+    if (!m.key?.fromMe) return '';
+    const s = Number(m.status);
+    if (!s || s <= 1) return ` {${DIM}-fg}·{/}`;   // pending / unknown
+    if (s === 2) return ` {${DIM}-fg}✓{/}`;         // sent to server
+    if (s === 3) return ` {${DIM}-fg}✓✓{/}`;        // delivered
+    return ` {${BLUE}-fg}✓✓{/}`;                    // read / played
+  }
+
   function lineFor(m) {
     const body = esc(messageText(m));
     const ts = timeStr(m.messageTimestamp);
     const time = ts ? `{${DIM}-fg}${ts}{/} ` : '';
     if (m.key?.fromMe) {
-      return `${time}{${GREEN}-fg}{bold}me{/}{${GREEN}-fg}:{/} ${body}`;
+      return `${time}{${GREEN}-fg}{bold}me{/}{${GREEN}-fg}:{/} ${body}${statusTick(m)}`;
     }
     const sjid = m.key?.participant || m.key?.remoteJid;
     const col = colorFor(sjid);
@@ -656,6 +669,18 @@ function startUI({ wa }) {
 
   // History batches / contact updates arriving async.
   store.on('sync', scheduleRefresh);
+
+  // Delivery/read status changed for a sent message: re-render the open chat so
+  // its ticks update. Coalesced — a burst of receipts triggers one repaint.
+  let statusRenderTimer = null;
+  store.on('message-update', safe(({ jid }) => {
+    if (!currentJid || !store.sameChat(jid, currentJid)) return;
+    if (statusRenderTimer) return;
+    statusRenderTimer = setTimeout(() => {
+      statusRenderTimer = null;
+      renderChat(currentJid);
+    }, 250);
+  }));
 
   // Live-filter the list as the user types in the search box.
   search.on('keypress', () => {

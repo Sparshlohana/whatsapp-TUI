@@ -1,6 +1,6 @@
 require('dotenv').config();
-const { startWhatsApp } = require('./whatsapp');
-const { startUI } = require('./ui');
+const { startWhatsApp } = require('./core/whatsapp');
+const { startUI } = require('./ui/ui');
 
 // Full history is needed to populate the chat LIST at startup; recent mode
 // only shows chats that get a live message. Default full; opt out with

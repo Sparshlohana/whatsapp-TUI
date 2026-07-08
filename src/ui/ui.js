@@ -1,7 +1,7 @@
 const blessed = require('blessed');
 const fs = require('fs');
 const util = require('util');
-const { messageText } = require('./message');
+const { messageText } = require('../utils/message');
 
 // Build and run the terminal UI. Takes the WhatsApp controller `wa`.
 function startUI({ wa }) {

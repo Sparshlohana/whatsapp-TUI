@@ -48,13 +48,13 @@ On first run a QR code prints to the console — scan it from **WhatsApp → Lin
 
 ## Project layout
 
-| File          | Role                                                          |
-|---------------|--------------------------------------------------------------|
-| `index.js`    | Entry point — boots the socket, mounts the UI on connect     |
-| `whatsapp.js` | Baileys socket lifecycle, auth, reconnect, history toggle    |
-| `store.js`    | In-memory chat/message store with disk persistence           |
-| `ui.js`       | blessed TUI — chat list, message view, input, keybindings    |
-| `message.js`  | Extract display text / media labels from Baileys messages    |
+| File                    | Role                                                          |
+|-------------------------|--------------------------------------------------------------|
+| `src/index.js`          | Entry point — boots the socket, mounts the UI on connect     |
+| `src/core/whatsapp.js`  | Baileys socket lifecycle, auth, reconnect, history toggle    |
+| `src/core/store.js`     | In-memory chat/message store with disk persistence           |
+| `src/ui/ui.js`          | blessed TUI — chat list, message view, input, keybindings    |
+| `src/utils/message.js`  | Extract display text / media labels from Baileys messages    |
 
 ## Logout
 

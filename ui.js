@@ -192,6 +192,13 @@ function startUI({ wa }) {
   const numberOf = (jid) => (jid || '').replace(/@.*$/, '');
   const isGroup = (jid) => !!jid && jid.endsWith('@g.us');
 
+  // Message-pane title for a chat, with a live presence suffix (typing…/online).
+  const chatLabel = (jid) => {
+    const icon = isGroup(jid) ? '👥' : '💬';
+    const pres = store.presenceText(jid);
+    return ` ${icon} ${nameFor(jid)}${pres ? ` · ${pres}` : ''} `;
+  };
+
   // --- rendering helpers ---
   // Strip C0/C1 control bytes (incl. raw ESC/ANSI sequences and newlines)
   // *before* blessed.escape. blessed.escape only neutralizes its own {tag}
@@ -366,8 +373,7 @@ function startUI({ wa }) {
   // Render the (recent) history of the open chat in one pass. Skips system /
   // empty messages (key-distribution, protocol edits) so the pane isn't blank.
   const renderChat = safe(function renderChat(jid, keepScroll) {
-    const icon = isGroup(jid) ? '👥' : '💬';
-    log.setLabel(` ${icon} ${nameFor(jid)} `);
+    log.setLabel(chatLabel(jid));
     // Preserve the reader's scroll position on in-place refreshes (e.g. a
     // status-tick update) unless they're already at the bottom. Captured
     // before setContent replaces the buffer.
@@ -439,6 +445,9 @@ function startUI({ wa }) {
     // Pull older messages on demand; they re-render via the 'sync' hook below.
     if (store.messagesFor(jid).length === 0) store.fetchHistory(jid);
     if (isGroup(jid)) loadMembers(jid); // prefetch for @-mentions
+    // Subscribe to the chat's presence so typing/online updates start flowing.
+    const c = client();
+    if (c) Promise.resolve(c.presenceSubscribe(jid)).catch(() => {});
     input.focus();
   });
 
@@ -450,7 +459,7 @@ function startUI({ wa }) {
         groupMembers.set(jid, (meta?.participants || []).map((p) => p.id));
         if (meta?.subject) {
           store.setGroupSubject(jid, meta.subject);
-          if (currentJid === jid) log.setLabel(` ${nameFor(jid)} `);
+          if (currentJid === jid) log.setLabel(chatLabel(jid));
           scheduleRefresh();
           screen.render();
         }
@@ -683,6 +692,14 @@ function startUI({ wa }) {
 
   // History batches / contact updates arriving async.
   store.on('sync', scheduleRefresh);
+
+  // Presence changed (typing/online): refresh the open chat's title suffix.
+  store.on('presence', safe(({ jid }) => {
+    if (currentJid && store.sameChat(jid, currentJid)) {
+      log.setLabel(chatLabel(currentJid));
+      screen.render();
+    }
+  }));
 
   // Delivery/read status changed for a sent message: re-render the open chat so
   // its ticks update. Coalesced — a burst of receipts triggers one repaint.

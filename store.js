@@ -4,6 +4,10 @@ const fs = require('fs');
 // In-memory store assembled from Baileys socket events.
 // (Baileys master removed makeInMemoryStore, so we build our own.)
 // proto WebMessageInfo.Status names -> numbers, for normalizing string statuses.
+// Auto-expire a typing/recording indicator this long after the last update,
+// in case the 'paused'/'unavailable' clear never arrives.
+const PRESENCE_TYPING_TTL = 10000;
+
 const STATUS_ENUM = { ERROR: 0, PENDING: 1, SERVER_ACK: 2, DELIVERY_ACK: 3, READ: 4, PLAYED: 5 };
 
 class Store extends EventEmitter {
@@ -18,6 +22,8 @@ class Store extends EventEmitter {
     this.chats = new Map();    // jid -> Chat
     this.messages = new Map(); // jid -> WAMessage[] (chronological)
     this.unread = new Map();   // canonical jid -> unread count (incoming, live)
+    this.presence = new Map(); // canonical jid -> { state, ts } (transient, not saved)
+    this._typingTimers = new Map(); // canonical jid -> expiry timer for typing state
     this.client = null;        // Baileys socket, for active LID lookups
     this._lidInflight = new Set(); // lids currently being resolved
     this._historyInflight = new Set(); // jids with an on-demand fetch pending
@@ -192,6 +198,27 @@ class Store extends EventEmitter {
         this._mapLidPn(lid, pn);
         this.emit('sync');
       }
+    });
+
+    // Typing / online presence for a chat. Transient — kept in memory only,
+    // updated as the socket streams presence.update after presenceSubscribe.
+    ev.on('presence.update', ({ id, presences }) => {
+      if (!id || !presences) return;
+      const key = this._canonicalJid(this._norm(id));
+      const state = this._derivePresence(presences);
+      this.presence.set(key, { state, ts: Date.now() });
+      // Schedule an auto-clear for typing/recording so a missed 'paused' can't
+      // leave the indicator stuck on; the timer re-emits so the UI refreshes.
+      clearTimeout(this._typingTimers.get(key));
+      if (state === 'composing' || state === 'recording') {
+        const t = setTimeout(() => {
+          this._typingTimers.delete(key);
+          this.emit('presence', { jid: id });
+        }, PRESENCE_TYPING_TTL);
+        if (t.unref) t.unref();
+        this._typingTimers.set(key, t);
+      }
+      this.emit('presence', { jid: id });
     });
   }
 
@@ -369,6 +396,37 @@ class Store extends EventEmitter {
     // Only notify for genuinely new messages so echoes don't double-render.
     if (live && isNew) this.emit('message', { jid, message: m });
     if (isNew) this._scheduleSave();
+  }
+
+  // Reduce a presences map to a single state, priority composing > recording >
+  // available > unavailable.
+  _derivePresence(presences) {
+    let recording = false, online = false;
+    for (const p of Object.values(presences)) {
+      const s = p?.lastKnownPresence;
+      if (s === 'composing') return 'composing';
+      if (s === 'recording') recording = true;
+      else if (s === 'available') online = true;
+    }
+    return recording ? 'recording' : online ? 'available' : 'unavailable';
+  }
+
+  // Human-readable presence for a chat: 'typing…', 'recording…', 'online', or
+  // '' when unknown/offline. Typing/recording auto-expires after the TTL, and
+  // 'online' is suppressed for groups (WhatsApp never shows a group as online).
+  presenceText(jid) {
+    const norm = this._norm(jid);
+    const p = this.presence.get(this._canonicalJid(norm));
+    if (!p) return '';
+    if (
+      (p.state === 'composing' || p.state === 'recording') &&
+      Date.now() - p.ts < PRESENCE_TYPING_TTL
+    ) {
+      return p.state === 'composing' ? 'typing…' : 'recording…';
+    }
+    const isGroup = typeof norm === 'string' && norm.endsWith('@g.us');
+    if (p.state === 'available' && !isGroup) return 'online';
+    return '';
   }
 
   // Update the delivery status of a message we sent, found across alias buckets

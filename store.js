@@ -3,6 +3,9 @@ const fs = require('fs');
 
 // In-memory store assembled from Baileys socket events.
 // (Baileys master removed makeInMemoryStore, so we build our own.)
+// proto WebMessageInfo.Status names -> numbers, for normalizing string statuses.
+const STATUS_ENUM = { ERROR: 0, PENDING: 1, SERVER_ACK: 2, DELIVERY_ACK: 3, READ: 4, PLAYED: 5 };
+
 class Store extends EventEmitter {
   constructor() {
     super();
@@ -373,6 +376,10 @@ class Store extends EventEmitter {
   // ticks. Never regresses status (read > delivered > sent) for out-of-order
   // updates. Returns true if a stored message changed.
   _applyStatus(key, status) {
+    // Normalize to the numeric proto enum. Usually a number, but harden against
+    // a string enum name (e.g. 'READ') so Number('READ')=NaN can't corrupt it.
+    const n = typeof status === 'number' ? status : STATUS_ENUM[status];
+    if (n == null || Number.isNaN(n)) return false;
     const jid = this._norm(key.remoteJid);
     if (!jid) return false;
     for (const alias of this._aliasSet(jid)) {
@@ -380,8 +387,8 @@ class Store extends EventEmitter {
       if (!list) continue;
       const m = list.find((x) => x.key?.id === key.id);
       if (!m) continue;
-      if ((Number(m.status) || 0) >= Number(status)) return false;
-      m.status = status;
+      if ((Number(m.status) || 0) >= n) return false;
+      m.status = n;
       this.emit('message-update', { jid });
       return true;
     }

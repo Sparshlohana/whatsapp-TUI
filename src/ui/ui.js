@@ -280,7 +280,7 @@ function startUI({ wa }) {
     const mode = wa.fullHistory ? 'full' : 'recent';
     header.setContent(
       ` {bold}wp-chat{/}    ${dot} ${state}    sync: ${esc(store.syncStatus())}` +
-        `    mode: ${mode} [F]    ·  / search · Tab focus · ^R reply · ^E react · q quit `
+        `    mode: ${mode} [F]    ·  / search · Tab focus · ^R reply · ^Y react · q quit `
     );
   }
 
@@ -769,8 +769,10 @@ function startUI({ wa }) {
     else if (key && key.ctrl && key.name === 'r' && currentJid) {
       setImmediate(openReply);
     }
-    // Ctrl-E while typing: open the emoji react picker.
-    else if (key && key.ctrl && key.name === 'e' && currentJid) {
+    // Ctrl-Y while typing: open the emoji react picker. (Ctrl-E is swallowed by
+    // some terminals — e.g. VS Code binds it to Quick Open — so it never reaches
+    // the app; Ctrl-Y passes through like Ctrl-R.)
+    else if (key && key.ctrl && key.name === 'y' && currentJid) {
       setImmediate(openReact);
     }
   });
@@ -909,9 +911,9 @@ function startUI({ wa }) {
     if (currentJid) openReply();
   });
 
-  // Ctrl-E opens the emoji react picker (from the list / message pane; the
+  // Ctrl-Y opens the emoji react picker (from the list / message pane; the
   // input-focused case is handled in the input 'keypress' hook above).
-  screen.key(['C-e'], () => {
+  screen.key(['C-y'], () => {
     if (currentJid) openReact();
   });
 

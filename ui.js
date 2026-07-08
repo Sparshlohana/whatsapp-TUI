@@ -371,10 +371,17 @@ function startUI({ wa }) {
     // Track the *unfiltered* count — this is what scheduleRefresh compares
     // against, so late-arriving messages reliably trigger a repaint.
     lastRenderLen = store.messagesFor(jid).length;
+    // When the pane shrinks (switching from a long chat to a short/empty one),
+    // blessed's cell diff can leave the taller previous render's cells on
+    // screen as stray fragments — especially in terminals with imperfect
+    // wide-char width (VS Code). Force a full repaint so nothing lingers.
+    if (lines.length < lastLineCount) screen.realloc();
+    lastLineCount = lines.length;
     screen.render();
   });
   let lastRenderJid = null;
   let lastRenderLen = 0;
+  let lastLineCount = 0;
 
   // Send WhatsApp read receipts for a chat's incoming messages and clear its
   // unread counter. Capped so opening a huge backlog doesn't blast hundreds of

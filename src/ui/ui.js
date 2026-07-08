@@ -175,6 +175,47 @@ function startUI({ wa }) {
     },
   });
 
+  // React picker: overlay list to choose a message to emoji-react to (Ctrl-E).
+  const reactBox = blessed.list({
+    parent: screen,
+    label: ' 😀 React — Enter pick · Esc cancel ',
+    hidden: true,
+    top: 1,
+    left: SIDEBAR,
+    width: `100%-${SIDEBAR}`,
+    height: '100%-4',
+    keys: true,
+    vi: true,
+    tags: true,
+    scrollbar: { ch: ' ', style: { bg: BLUE } },
+    border: { type: 'line' },
+    style: {
+      selected: { bg: BLUE, fg: 'black', bold: true },
+      item: { fg: 'white' },
+      border: { fg: BLUE },
+    },
+  });
+
+  // Emoji picker: shown after a message is chosen in the react picker.
+  const emojiBox = blessed.list({
+    parent: screen,
+    label: ' Emoji — Enter send · Esc back ',
+    hidden: true,
+    top: 'center',
+    left: 'center',
+    width: 24,
+    height: 12,
+    keys: true,
+    vi: true,
+    tags: true,
+    border: { type: 'line' },
+    style: {
+      selected: { bg: BLUE, fg: 'black', bold: true },
+      item: { fg: 'white' },
+      border: { fg: BLUE },
+    },
+  });
+
   let jids = [];        // parallel to list items: index -> jid
   let currentJid = null;
   let filter = '';      // current search query (lowercased)
@@ -187,6 +228,8 @@ function startUI({ wa }) {
   let replyTo = null;              // WAMessage to quote on the next send, or null
   let renderedMsgs = [];           // messages currently shown in the log (for reply)
   let replySnapshot = [];          // frozen copy of the list shown in the reply picker
+  let reactSnapshot = [];          // frozen copy of the list shown in the react picker
+  let reactTarget = null;          // message chosen to react to (while emoji picker open)
 
   const nameFor = (jid) => store.nameFor(jid);
   const numberOf = (jid) => (jid || '').replace(/@.*$/, '');
@@ -237,7 +280,7 @@ function startUI({ wa }) {
     const mode = wa.fullHistory ? 'full' : 'recent';
     header.setContent(
       ` {bold}wp-chat{/}    ${dot} ${state}    sync: ${esc(store.syncStatus())}` +
-        `    mode: ${mode} [F]    ·  / search · Tab focus · ^R reply · q quit `
+        `    mode: ${mode} [F]    ·  / search · Tab focus · ^R reply · ^E react · q quit `
     );
   }
 
@@ -620,6 +663,101 @@ function startUI({ wa }) {
     screen.render();
   });
 
+  // --- emoji react ---
+  // WhatsApp's default quick-reaction set, plus a couple of extras.
+  const REACT_EMOJIS = [
+    ['👍', 'thumbs up'],
+    ['❤️', 'heart'],
+    ['😂', 'laugh'],
+    ['😮', 'wow'],
+    ['😢', 'sad'],
+    ['🙏', 'thanks'],
+    ['🔥', 'fire'],
+    ['✅', 'done'],
+  ];
+
+  // Open the react picker over the message pane for the currently open chat.
+  function openReact() {
+    if (!currentJid || !renderedMsgs.length) return;
+    // Release the input textbox's key grab before focusing the picker (same
+    // deadlock-avoidance pattern as openReply / openMention).
+    if (screen.focused === input) {
+      suppressCancel = true;
+      input.cancel();
+      suppressCancel = false;
+    }
+    // Snapshot the visible messages so a live incoming message can't desync the
+    // picker indexes while it's open.
+    reactSnapshot = renderedMsgs.slice();
+    reactBox.setItems(
+      reactSnapshot.map((m) => {
+        const who = m.key?.fromMe
+          ? 'me'
+          : nameFor(m.key?.participant || m.key?.remoteJid);
+        return `{${DIM}-fg}${esc(who)}:{/} ${esc(snippet(m))}`;
+      })
+    );
+    reactBox.select(reactSnapshot.length - 1); // default to the newest message
+    reactBox.show();
+    reactBox.focus();
+    screen.render();
+  }
+
+  // Message chosen — show the emoji picker.
+  function pickReactTarget() {
+    const m = reactSnapshot[reactBox.selected];
+    reactBox.hide();
+    if (!m) {
+      input.focus();
+      screen.render();
+      return;
+    }
+    reactTarget = m;
+    emojiBox.setItems(REACT_EMOJIS.map(([e, label]) => ` ${e}  {${DIM}-fg}${label}{/}`));
+    emojiBox.select(0);
+    emojiBox.show();
+    emojiBox.focus();
+    screen.render();
+  }
+
+  // Emoji chosen — send the reaction. Fire-and-forget like a normal send so a
+  // slow socket never freezes the keyboard.
+  function sendReact() {
+    const pick = REACT_EMOJIS[emojiBox.selected];
+    const target = reactTarget;
+    emojiBox.hide();
+    reactTarget = null;
+    input.focus();
+    screen.render();
+    if (!pick || !target || !currentJid) return;
+    Promise.resolve()
+      .then(() => client().sendMessage(currentJid, { react: { text: pick[0], key: target.key } }))
+      .then((sent) => {
+        store.ingest(sent); // echo our own reaction into the store
+        screen.render();
+      })
+      .catch((err) => {
+        log.add(`⚠️ react failed: ${err.message}`);
+        screen.render();
+      });
+  }
+
+  reactBox.key(['enter'], pickReactTarget);
+  reactBox.key(['escape'], () => {
+    reactBox.hide();
+    input.focus();
+    screen.render();
+  });
+  emojiBox.key(['enter'], sendReact);
+  emojiBox.key(['escape'], () => {
+    // Step back to the message picker rather than dropping out entirely.
+    emojiBox.hide();
+    reactTarget = null;
+    reactBox.show();
+    reactBox.focus();
+    screen.render();
+  });
+
   // --- events ---
   list.on('select', openSelected);
 
@@ -630,6 +768,10 @@ function startUI({ wa }) {
     // read mode, so this keypress hook is the reliable place to catch it).
     else if (key && key.ctrl && key.name === 'r' && currentJid) {
       setImmediate(openReply);
+    }
+    // Ctrl-E while typing: open the emoji react picker.
+    else if (key && key.ctrl && key.name === 'e' && currentJid) {
+      setImmediate(openReact);
     }
   });
 
@@ -765,6 +907,12 @@ function startUI({ wa }) {
   // screen-level binding covers Ctrl-R from the list / message pane.
   screen.key(['C-r'], () => {
     if (currentJid) openReply();
+  });
+
+  // Ctrl-E opens the emoji react picker (from the list / message pane; the
+  // input-focused case is handled in the input 'keypress' hook above).
+  screen.key(['C-e'], () => {
+    if (currentJid) openReact();
   });
 
   // F toggles history-sync mode (recent <-> full). Reconnects to apply it.

@@ -42,6 +42,9 @@ On first run a QR code prints to the console — scan it from **WhatsApp → Lin
 | `/`         | Search / filter the chat list                 |
 | `Enter`     | (search) jump into the filtered list          |
 | `Esc`       | Back to list / clear filter                   |
+| `Ctrl-R`    | Reply to a message (pick from the open chat)  |
+| `Ctrl-E`    | React to a message with an emoji              |
+| `@`         | (group chat) mention a member                 |
 | `F`         | Toggle history-sync mode (recent ↔ full)      |
 | `Ctrl-L`    | Force repaint + refocus the list (recovery)   |
 | `q` / `Ctrl-C` | Quit                                       |

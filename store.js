@@ -18,6 +18,7 @@ class Store extends EventEmitter {
     this.chats = new Map();    // jid -> Chat
     this.messages = new Map(); // jid -> WAMessage[] (chronological)
     this.unread = new Map();   // canonical jid -> unread count (incoming, live)
+    this.presence = new Map(); // canonical jid -> presences map (transient, not saved)
     this.client = null;        // Baileys socket, for active LID lookups
     this._lidInflight = new Set(); // lids currently being resolved
     this._historyInflight = new Set(); // jids with an on-demand fetch pending
@@ -192,6 +193,15 @@ class Store extends EventEmitter {
         this._mapLidPn(lid, pn);
         this.emit('sync');
       }
+    });
+
+    // Typing / online presence for a chat. Transient — kept in memory only,
+    // updated as the socket streams presence.update after presenceSubscribe.
+    ev.on('presence.update', ({ id, presences }) => {
+      if (!id || !presences) return;
+      const key = this._canonicalJid(this._norm(id));
+      this.presence.set(key, presences);
+      this.emit('presence', { jid: id });
     });
   }
 
@@ -369,6 +379,24 @@ class Store extends EventEmitter {
     // Only notify for genuinely new messages so echoes don't double-render.
     if (live && isNew) this.emit('message', { jid, message: m });
     if (isNew) this._scheduleSave();
+  }
+
+  // Human-readable presence for a chat: 'typing…', 'recording…', 'online', or
+  // '' when unknown/offline. Aggregates across participants (groups).
+  presenceText(jid) {
+    const presences = this.presence.get(this._canonicalJid(this._norm(jid)));
+    if (!presences) return '';
+    let composing = false, recording = false, online = false;
+    for (const p of Object.values(presences)) {
+      const s = p?.lastKnownPresence;
+      if (s === 'composing') composing = true;
+      else if (s === 'recording') recording = true;
+      else if (s === 'available') online = true;
+    }
+    if (composing) return 'typing…';
+    if (recording) return 'recording…';
+    if (online) return 'online';
+    return '';
   }
 
   // Update the delivery status of a message we sent, found across alias buckets

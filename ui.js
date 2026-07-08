@@ -305,6 +305,10 @@ function startUI({ wa }) {
 
     const newIdx = jids.indexOf(selectedJid);
     if (newIdx >= 0) list.select(newIdx);
+    // Selection dropped (e.g. the filter no longer includes it): snap to the
+    // top (the best fuzzy match / latest chat) rather than letting blessed
+    // clamp the stale index to the last item.
+    else if (jids.length) list.select(0);
     screen.render();
   });
 
@@ -702,13 +706,19 @@ function startUI({ wa }) {
   });
   // Enter in search jumps into the (filtered) list.
   search.key(['enter'], () => list.focus());
-  // Esc clears the filter and returns to the list.
-  search.key(['escape'], () => {
+  // Esc always clears the search and returns to the full, latest-first list.
+  // Bound on 'cancel' (not the escape key) because the textbox consumes Esc as
+  // a cancel while reading, so a plain key handler never fires.
+  function clearSearch() {
     search.clearValue();
     filter = '';
-    refreshList();
+    refreshList();  // filter '' → all chats, newest first
+    list.select(0); // highlight the latest chat
     list.focus();
-  });
+    screen.render();
+  }
+  search.on('cancel', clearSearch);
+  search.key(['escape'], clearSearch);
 
   // --- keys ---
   screen.key(['q', 'C-c'], () => process.exit(0));

@@ -2,6 +2,7 @@ const blessed = require('blessed');
 const fs = require('fs');
 const util = require('util');
 const { messageText } = require('../utils/message');
+const { viewableKind, downloadImage, renderHalfBlocks } = require('../utils/media');
 
 // Build and run the terminal UI. Takes the WhatsApp controller `wa`.
 function startUI({ wa }) {
@@ -175,6 +176,39 @@ function startUI({ wa }) {
     },
   });
 
+  const mediaBox = blessed.list({
+    parent: screen,
+    label: ' 🖼  View sticker / image — Enter view · Esc cancel ',
+    hidden: true,
+    top: 1,
+    left: SIDEBAR,
+    width: `100%-${SIDEBAR}`,
+    height: '100%-4',
+    keys: true,
+    vi: true,
+    tags: true,
+    scrollbar: { ch: ' ', style: { bg: BLUE } },
+    border: { type: 'line' },
+    style: {
+      selected: { bg: BLUE, fg: 'black', bold: true },
+      item: { fg: 'white' },
+      border: { fg: BLUE },
+    },
+  });
+
+  const viewer = blessed.box({
+    parent: screen,
+    hidden: true,
+    top: 1,
+    left: SIDEBAR,
+    width: `100%-${SIDEBAR}`,
+    height: '100%-4',
+    tags: true,
+    keys: true,
+    border: { type: 'line' },
+    style: { border: { fg: BLUE } },
+  });
+
   let jids = [];        // parallel to list items: index -> jid
   let currentJid = null;
   let filter = '';      // current search query (lowercased)
@@ -187,6 +221,9 @@ function startUI({ wa }) {
   let replyTo = null;              // WAMessage to quote on the next send, or null
   let renderedMsgs = [];           // messages currently shown in the log (for reply)
   let replySnapshot = [];          // frozen copy of the list shown in the reply picker
+  let mediaSnapshot = [];
+  let viewing = null;
+  let viewToken = 0;
 
   const nameFor = (jid) => store.nameFor(jid);
   const numberOf = (jid) => (jid || '').replace(/@.*$/, '');
@@ -237,7 +274,7 @@ function startUI({ wa }) {
     const mode = wa.fullHistory ? 'full' : 'recent';
     header.setContent(
       ` {bold}wp-chat{/}    ${dot} ${state}    sync: ${esc(store.syncStatus())}` +
-        `    mode: ${mode} [F]    ·  / search · Tab focus · ^R reply · q quit `
+        `    mode: ${mode} [F]    ·  / search · Tab focus · ^R reply · ^O view · q quit `
     );
   }
 
@@ -620,6 +657,101 @@ function startUI({ wa }) {
     screen.render();
   });
 
+  function releaseInput() {
+    if (screen.focused === input) {
+      suppressCancel = true;
+      input.cancel();
+      suppressCancel = false;
+    }
+  }
+
+  function openMedia() {
+    if (!currentJid) return;
+    releaseInput();
+    mediaSnapshot = renderedMsgs.filter((m) => viewableKind(m));
+    if (!mediaSnapshot.length) {
+      showViewer(' 🖼  Nothing to view · Esc close ', `{${DIM}-fg}No stickers or images in the loaded messages.{/}`);
+      return;
+    }
+    mediaBox.setItems(
+      mediaSnapshot.map((m) => {
+        const who = m.key?.fromMe ? 'me' : nameFor(m.key?.participant || m.key?.remoteJid);
+        const ts = timeStr(m.messageTimestamp);
+        return `{${DIM}-fg}${ts} ${esc(who)}:{/} ${esc(snippet(m))}`;
+      })
+    );
+    mediaBox.select(mediaSnapshot.length - 1);
+    mediaBox.show();
+    mediaBox.focus();
+    screen.render();
+  }
+
+  function showViewer(label, content) {
+    viewer.setLabel(label);
+    viewer.setContent(content);
+    viewer.show();
+    viewer.setFront();
+    viewer.focus();
+    screen.render();
+  }
+
+  function closeViewer() {
+    const fromPicker = !!viewing;
+    viewToken++;
+    viewing = null;
+    viewer.hide();
+    if (fromPicker) {
+      mediaBox.show();
+      mediaBox.focus();
+    } else {
+      input.focus();
+    }
+    screen.render();
+  }
+
+  const drawViewing = safe(async function drawViewing() {
+    if (!viewing) return;
+    const token = ++viewToken;
+    const { m, label } = viewing;
+    try {
+      const buf = await downloadImage(m, client());
+      if (token !== viewToken) return;
+      const cols = viewer.width - 2;
+      const rows = viewer.height - 2;
+      const { lines, width } = await renderHalfBlocks(buf, cols, rows);
+      if (token !== viewToken) return;
+      const pad = ' '.repeat(Math.max(0, Math.floor((cols - width) / 2)));
+      const top = Math.max(0, Math.floor((rows - lines.length) / 2));
+      showViewer(label, '\n'.repeat(top) + lines.map((l) => pad + l).join('\n'));
+    } catch (err) {
+      if (token !== viewToken) return;
+      showViewer(label, `{red-fg}Couldn't load it: ${esc(err?.message || err)}{/}`);
+    }
+  });
+
+  function pickMedia() {
+    const m = mediaSnapshot[mediaBox.selected];
+    mediaBox.hide();
+    if (!m) {
+      input.focus();
+      screen.render();
+      return;
+    }
+    const who = m.key?.fromMe ? 'me' : nameFor(m.key?.participant || m.key?.remoteJid);
+    const label = ` 🖼  ${esc(viewableKind(m))} from ${esc(who)} · Esc close `;
+    viewing = { m, label };
+    showViewer(label, `{${DIM}-fg}loading…{/}`);
+    drawViewing();
+  }
+
+  mediaBox.key(['enter'], pickMedia);
+  mediaBox.key(['escape'], () => {
+    mediaBox.hide();
+    input.focus();
+    screen.render();
+  });
+  viewer.key(['escape', 'enter'], closeViewer);
+
   // --- events ---
   list.on('select', openSelected);
 
@@ -630,6 +762,8 @@ function startUI({ wa }) {
     // read mode, so this keypress hook is the reliable place to catch it).
     else if (key && key.ctrl && key.name === 'r' && currentJid) {
       setImmediate(openReply);
+    } else if (key && key.ctrl && key.name === 'o' && currentJid) {
+      setImmediate(openMedia);
     }
   });
 
@@ -767,6 +901,10 @@ function startUI({ wa }) {
     if (currentJid) openReply();
   });
 
+  screen.key(['C-o'], () => {
+    if (currentJid && viewer.hidden && mediaBox.hidden) openMedia();
+  });
+
   // F toggles history-sync mode (recent <-> full). Reconnects to apply it.
   screen.key(['f', 'F'], () => {
     wa.toggleFullHistory();
@@ -788,6 +926,7 @@ function startUI({ wa }) {
   screen.on('resize', () => {
     refreshList();
     if (currentJid) renderChat(currentJid);
+    if (viewing && !viewer.hidden) drawViewing();
   });
 
   // A stray async error must not wedge the UI's key handling.

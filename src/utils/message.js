@@ -76,4 +76,4 @@ function messageText(m) {
   return '<message>';
 }
 
-module.exports = { messageText };
+module.exports = { messageText, unwrap };
